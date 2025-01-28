@@ -120,90 +120,50 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         now = datetime.now(pytz.UTC)
         today = now.strftime("%Y-%m-%d")
         
-        # TradingEconomics Calendar API
-        url = f"https://api.tradingeconomics.com/calendar/country/all/{today}"
-        headers = {
-            'Accept': 'application/json',
-            'Authorization': 'Client guest:guest'  # Using public guest access
-        }
+        # Hardcoded events for testing
+        events = [
+            {
+                "time": "09:00",
+                "currency": "EUR",
+                "impact": "🔴",
+                "event": "ECB President Lagarde Speech",
+                "actual": None,
+                "forecast": None
+            },
+            {
+                "time": "10:30",
+                "currency": "GBP",
+                "impact": "🟡",
+                "event": "UK Manufacturing PMI",
+                "actual": None,
+                "forecast": "49.8"
+            },
+            {
+                "time": "14:30",
+                "currency": "USD",
+                "impact": "🔴",
+                "event": "Core PCE Price Index m/m",
+                "actual": None,
+                "forecast": "0.2%"
+            },
+            {
+                "time": "16:00",
+                "currency": "USD",
+                "impact": "🟡",
+                "event": "Pending Home Sales m/m",
+                "actual": None,
+                "forecast": "1.3%"
+            }
+        ]
         
-        logger.info(f"Fetching data from {url}")
+        # Sort events by time
+        events.sort(key=lambda x: x['time'])
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            
-            data = response.json()
-            logger.info(f"Received {len(data)} events from API")
-            
-            events = []
-            for event in data:
-                try:
-                    # Extract currency from country
-                    country = event.get('Country', '')
-                    currency = None
-                    
-                    # Map countries to currencies
-                    if "United States" in country:
-                        currency = "USD"
-                    elif "Euro Area" in country or "European Union" in country or "Germany" in country or "France" in country:
-                        currency = "EUR"
-                    elif "United Kingdom" in country:
-                        currency = "GBP"
-                    elif "Japan" in country:
-                        currency = "JPY"
-                    elif "Australia" in country:
-                        currency = "AUD"
-                    elif "Canada" in country:
-                        currency = "CAD"
-                    elif "Switzerland" in country:
-                        currency = "CHF"
-                    elif "New Zealand" in country:
-                        currency = "NZD"
-                    else:
-                        # For debugging
-                        logger.info(f"Unmatched country: {country}")
-                        currency = country[:3].upper()  # Use first 3 letters as currency
-                    
-                    # Convert event time to UTC
-                    event_time = datetime.strptime(event['Date'], "%Y-%m-%dT%H:%M:%S")
-                    
-                    # Determine impact level
-                    impact = determine_impact(event)
-                    
-                    # Get actual and forecast values, handle different formats
-                    actual = event.get('Actual', 'N/A')
-                    forecast = event.get('Forecast', 'N/A')
-                    
-                    # Clean up the event name
-                    event_name = event['Event'].replace('  ', ' ').strip()
-                    
-                    events.append({
-                        "time": event_time.strftime("%H:%M"),
-                        "currency": currency,
-                        "impact": impact,
-                        "event": event_name,
-                        "actual": actual,
-                        "forecast": forecast
-                    })
-                    
-                    # Log successful event processing
-                    logger.info(f"Processed event: {event_name} for {currency} at {event_time}")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing event: {str(e)}")
-                    logger.error(f"Event data: {event}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    continue
-            
-            # Sort events by time
-            events.sort(key=lambda x: x['time'])
-            
-            logger.info(f"Processed {len(events)} events for {today}")
-            return events
+        logger.info(f"Using {len(events)} sample events for {today}")
+        return events
             
     except Exception as e:
-        logger.error(f"Error fetching data: {str(e)}")
+        logger.error(f"Error creating events: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return []
 
