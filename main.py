@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from bs4 import BeautifulSoup
 import httpx
 from datetime import datetime, timedelta
 import pytz
@@ -12,6 +11,8 @@ from logging.handlers import RotatingFileHandler
 import traceback
 import asyncio
 import json
+import feedparser
+import re
 
 # Setup logging
 logging.basicConfig(
@@ -44,6 +45,30 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 logger.info(f"OPENAI_API_KEY present: {OPENAI_API_KEY is not None}")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 logger.info(f"OpenAI client initialized: {client is not None}")
+
+def extract_currency(title: str) -> str:
+    """Extract currency from event title."""
+    currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
+    for currency in currencies:
+        if currency in title:
+            return currency
+    return "OTHER"
+
+def determine_impact(title: str, description: str) -> str:
+    """Determine impact level based on keywords."""
+    high_impact = ["NFP", "CPI", "GDP", "PMI", "Rate Decision", "Employment"]
+    medium_impact = ["Retail Sales", "Trade Balance", "Manufacturing", "Consumer"]
+    
+    title_upper = title.upper()
+    desc_upper = description.upper()
+    
+    for term in high_impact:
+        if term.upper() in title_upper or term.upper() in desc_upper:
+            return "🔴"
+    for term in medium_impact:
+        if term.upper() in title_upper or term.upper() in desc_upper:
+            return "🟡"
+    return "🟢"
 
 async def format_with_ai(events: List[Dict]) -> str:
     try:
@@ -100,78 +125,66 @@ Format times in 24-hour format."""
         ])
 
 async def fetch_economic_calendar_data() -> List[Dict]:
-    # Get current date in UTC
-    now = datetime.now(pytz.UTC)
-    date_str = now.strftime("%Y-%m-%d")
-    
-    # FXStreet API endpoint
-    url = "https://api.fxstreet.com/calendar/v1/events/list"
-    logger.info(f"Fetching data from {url}")
-    
-    # Calculate start and end of today in UTC
-    start_date = datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = start_date + timedelta(days=1)
-    
-    params = {
-        "culture": "en-US",
-        "start": start_date.isoformat(),
-        "end": end_date.isoformat(),
-        "volatilities": ["1", "2", "3"],  # Low, Medium, High impact
-        "eventCategories": ["Central Banks", "Economic Indicators"],
-        "countries": ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]  # Major currencies
-    }
-    
-    headers = {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            response = await client.get(url, params=params, headers=headers)
+    try:
+        # Get current date in UTC
+        now = datetime.now(pytz.UTC)
+        today = now.strftime("%Y-%m-%d")
+        
+        # Investing.com Economic Calendar RSS feed
+        url = "https://www.investing.com/rss/economic_calendar.rss"
+        logger.info(f"Fetching data from {url}")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
             response.raise_for_status()
-            logger.info(f"Got response from {url}, status: {response.status_code}")
             
-            data = response.json()
-            logger.info(f"Received {len(data)} events from API")
+            # Parse RSS feed
+            feed = feedparser.parse(response.text)
+            logger.info(f"Received {len(feed.entries)} entries from RSS feed")
             
             events = []
-            for event in data:
+            for entry in feed.entries:
                 try:
-                    # Convert event time to UTC
-                    event_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
+                    # Parse event time
+                    event_time = datetime.strptime(entry.published, "%a, %d %b %Y %H:%M:%S %z")
                     
-                    # Get impact level
-                    volatility = event.get('volatility', 0)
-                    impact_level = '🔴' if volatility == 3 else '🟡' if volatility == 2 else '🟢' if volatility == 1 else '⚪️'
+                    # Only include events from today
+                    if event_time.strftime("%Y-%m-%d") != today:
+                        continue
+                    
+                    # Extract event details
+                    currency = extract_currency(entry.title)
+                    impact = determine_impact(entry.title, entry.description)
+                    
+                    # Try to extract actual and forecast values from description
+                    actual_match = re.search(r"Actual: ([^,]+)", entry.description)
+                    forecast_match = re.search(r"Forecast: ([^,]+)", entry.description)
                     
                     events.append({
                         "time": event_time.strftime("%H:%M"),
-                        "currency": event['currency'],
-                        "impact": impact_level,
-                        "event": event['name'],
-                        "actual": event.get('actual'),
-                        "forecast": event.get('forecast')
+                        "currency": currency,
+                        "impact": impact,
+                        "event": entry.title,
+                        "actual": actual_match.group(1) if actual_match else None,
+                        "forecast": forecast_match.group(1) if forecast_match else None
                     })
+                    
                 except Exception as e:
-                    logger.error(f"Error processing event: {str(e)}")
-                    logger.error(f"Event data: {event}")
+                    logger.error(f"Error processing entry: {str(e)}")
+                    logger.error(f"Entry data: {entry}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
             
             # Sort events by time
             events.sort(key=lambda x: x['time'])
             
-            logger.info(f"Processed {len(events)} events for {date_str}")
+            logger.info(f"Processed {len(events)} events for {today}")
             return events
             
-        except Exception as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            
-            # Fallback to empty list if API fails
-            logger.info("Using empty events list as fallback")
-            return []
+    except Exception as e:
+        logger.error(f"Error fetching data: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return []
 
 @app.get("/calendar")
 async def get_economic_calendar():
