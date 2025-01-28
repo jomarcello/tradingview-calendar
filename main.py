@@ -158,15 +158,19 @@ async def send_to_telegram(events: List[str]):
         telegram_url = "https://tradingview-telegram-service-production.up.railway.app/send_message"
         message = "\n".join(events)
         
+        logger.info(f"Sending to Telegram: {message}")
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 telegram_url,
                 json={
                     "message": message,
-                    "parse_mode": "HTML"
+                    "parse_mode": "HTML",
+                    "chat_id": "-1002047725461"  
                 }
             )
             response.raise_for_status()
+            logger.info(f"Telegram response: {response.text}")
             logger.info("Successfully sent events to Telegram")
             
     except Exception as e:
@@ -210,6 +214,9 @@ async def get_calendar():
                 
                 formatted_event = f"{event_time} {impact} {event_name} {forecast} {actual}"
                 formatted_events.append(formatted_event)
+        
+        # Log the formatted events
+        logger.info(f"Formatted events: {formatted_events}")
         
         # Send to Telegram
         await send_to_telegram(formatted_events)
