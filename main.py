@@ -8,6 +8,7 @@ import json
 import time
 import re
 from typing import List, Dict
+import httpx
 
 # Setup logging
 logging.basicConfig(
@@ -151,13 +152,37 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         logger.error(f"Traceback: {traceback.format_exc()}")
         return []
 
+async def send_to_telegram(events: List[str]):
+    """Send events to Telegram service"""
+    try:
+        telegram_url = "https://tradingview-telegram-service-production.up.railway.app/send_message"
+        message = "\n".join(events)
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                telegram_url,
+                json={
+                    "message": message,
+                    "parse_mode": "HTML"
+                }
+            )
+            response.raise_for_status()
+            logger.info("Successfully sent events to Telegram")
+            
+    except Exception as e:
+        logger.error(f"Error sending to Telegram: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to send to Telegram: {str(e)}")
+
 @app.get("/calendar")
 async def get_calendar():
     try:
         events = await fetch_economic_calendar_data()
         
         if not events:
-            return {"status": "success", "events": ["No economic events found for today."]}
+            message = ["No economic events found for today."]
+            await send_to_telegram(message)
+            return {"status": "success", "events": message}
             
         # Format events for display
         formatted_events = []
@@ -172,7 +197,7 @@ async def get_calendar():
         
         # Format each currency group
         for currency, currency_events in events_by_currency.items():
-            currency_header = f"\n{currency} Events:"
+            currency_header = f"\n<b>{currency} Events:</b>"
             formatted_events.append(currency_header)
             
             # Format each event
@@ -185,6 +210,9 @@ async def get_calendar():
                 
                 formatted_event = f"{event_time} {impact} {event_name} {forecast} {actual}"
                 formatted_events.append(formatted_event)
+        
+        # Send to Telegram
+        await send_to_telegram(formatted_events)
         
         return {"status": "success", "events": formatted_events}
         
