@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from bs4 import BeautifulSoup
 import httpx
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from openai import OpenAI
 import logging
 from logging.handlers import RotatingFileHandler
 import traceback
+import asyncio
 
 # Setup logging
 logging.basicConfig(
@@ -26,6 +28,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global error handler caught: {str(exc)}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": type(exc).__name__}
+    )
 
 # Initialize OpenAI client only if API key is available
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -82,21 +93,38 @@ Only include time, event name, and impact level."""
         ])
 
 async def fetch_forex_factory_data() -> List[Dict]:
-    url = "https://www.forexfactory.com"
+    url = "https://www.forexfactory.com/calendar"  # Use specific calendar URL
     logger.info(f"Fetching data from {url}")
     
-    async with httpx.AsyncClient() as client:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1'
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         try:
-            response = await client.get(url)
+            # Add a small delay to avoid rate limiting
+            await asyncio.sleep(1)
+            
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
             logger.info(f"Got response from {url}, status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
             
             soup = BeautifulSoup(response.text, 'html.parser')
             calendar_table = soup.find('table', class_='calendar__table')
             
             if not calendar_table:
                 logger.error("Failed to find calendar table in response")
-                logger.error(f"Response content: {response.text[:500]}...")  # Log first 500 chars
+                logger.error(f"Response content: {response.text[:1000]}...")  # Log first 1000 chars
                 raise HTTPException(status_code=500, detail="Failed to find calendar table")
             
             events = []
