@@ -11,6 +11,9 @@ from logging.handlers import RotatingFileHandler
 import traceback
 import asyncio
 import json
+import time
+import re
+import feedparser
 
 # Setup logging
 logging.basicConfig(
@@ -103,70 +106,79 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         now = datetime.now(pytz.UTC)
         today = now.strftime("%Y-%m-%d")
         
-        # TradingView Economic Calendar API
-        url = "https://scanner.tradingview.com/economics/scan"
+        # Investing.com Economic Calendar RSS Feed
+        url = "https://www.investing.com/rss/economic_calendar.rss"
         headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
         }
         
-        # Request body for today's events
-        body = {
-            "filter": [
-                {"left": "date", "operation": "in_range", "right": [today, today]},
-                {"left": "country", "operation": "in_range", "right": ["US", "EU", "GB", "JP", "AU", "CA", "CH", "NZ"]}
-            ]
-        }
-        
-        # Get data from TradingView
-        logger.info(f"Fetching calendar data from TradingView for {today}")
+        # Get data from Investing.com
+        logger.info(f"Fetching calendar data from Investing.com for {today}")
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, headers=headers, json=body)
+            response = await client.get(url, headers=headers, follow_redirects=True)
             response.raise_for_status()
-            data = response.json()
             
-            logger.info(f"Received {len(data.get('data', []))} events from TradingView")
+            # Parse RSS feed
+            feed = feedparser.parse(response.text)
+            
+            logger.info(f"Received {len(feed.entries)} events from Investing.com")
             
             # Convert to our format
             events = []
-            for event in data.get('data', []):
+            for entry in feed.entries:
                 try:
-                    # Extract time in UTC
-                    event_time = datetime.fromtimestamp(event['d'][0], pytz.UTC)
+                    # Parse the title to extract information
+                    # Example: "(EU) ECB President Lagarde Speech"
+                    title = entry.title
                     
-                    # Map country to currency
-                    country_to_currency = {
-                        "US": "USD", "EU": "EUR", "GB": "GBP", "JP": "JPY",
-                        "AU": "AUD", "CA": "CAD", "CH": "CHF", "NZ": "NZD"
+                    # Extract currency from title (in parentheses)
+                    currency_match = re.search(r'\((.*?)\)', title)
+                    if not currency_match:
+                        continue
+                        
+                    currency = currency_match.group(1)
+                    event_name = title.split(') ', 1)[1] if ') ' in title else title
+                    
+                    # Convert currency codes
+                    currency_map = {
+                        "EU": "EUR",
+                        "UK": "GBP",
+                        "US": "USD",
+                        "JP": "JPY",
+                        "AU": "AUD",
+                        "CA": "CAD",
+                        "CH": "CHF",
+                        "NZ": "NZD"
                     }
                     
-                    # Determine impact based on importance
-                    importance = event['d'][3]  # 0-100 scale
-                    if importance >= 70:
-                        impact = "🔴"
-                    elif importance >= 40:
-                        impact = "🟡"
-                    else:
-                        impact = "🟢"
+                    # Determine impact based on keywords
+                    high_impact = ["GDP", "CPI", "NFP", "PMI", "Rate Decision", "Employment"]
+                    medium_impact = ["Trade Balance", "Retail Sales", "Industrial Production"]
+                    
+                    impact = "🔴" if any(kw in event_name for kw in high_impact) else \
+                            "🟡" if any(kw in event_name for kw in medium_impact) else "🟢"
+                    
+                    # Parse time from published date
+                    event_time = datetime.fromtimestamp(time.mktime(entry.published_parsed), pytz.UTC)
                     
                     # Format the event
                     formatted_event = {
                         "time": event_time.strftime("%H:%M"),
-                        "currency": country_to_currency.get(event['d'][1], 'OTHER'),
+                        "currency": currency_map.get(currency, currency),
                         "impact": impact,
-                        "event": event['d'][2],  # Event name
-                        "actual": event['d'][4] if len(event['d']) > 4 else None,
-                        "forecast": event['d'][5] if len(event['d']) > 5 else None
+                        "event": event_name,
+                        "actual": None,  # RSS feed doesn't include these
+                        "forecast": None
                     }
                     
-                    # Only add events that haven't happened yet
-                    if event_time > now:
+                    # Only add events that haven't happened yet and are for today
+                    if event_time > now and event_time.date() == now.date():
                         events.append(formatted_event)
                         logger.info(f"Added event: {formatted_event['event']} at {formatted_event['time']}")
                     
                 except Exception as e:
                     logger.error(f"Error processing event: {str(e)}")
-                    logger.error(f"Event data: {event}")
+                    logger.error(f"Event data: {entry}")
                     continue
             
             # Sort events by time
