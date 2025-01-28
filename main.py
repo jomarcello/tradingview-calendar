@@ -103,51 +103,60 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         now = datetime.now(pytz.UTC)
         today = now.strftime("%Y-%m-%d")
         
-        # Forex Factory API endpoint
-        url = "https://api.forexfactory.com/v1/calendar"
+        # TradingView Economic Calendar API
+        url = "https://scanner.tradingview.com/economics/scan"
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer hJHcmLky.PO2xWR4aTrQXnUuS2BZLegzPTEnKidy2"
+            "Content-Type": "application/json"
         }
         
-        # Get data from Forex Factory
-        logger.info(f"Fetching calendar data from Forex Factory for {today}")
+        # Request body for today's events
+        body = {
+            "filter": [
+                {"left": "date", "operation": "in_range", "right": [today, today]},
+                {"left": "country", "operation": "in_range", "right": ["US", "EU", "GB", "JP", "AU", "CA", "CH", "NZ"]}
+            ]
+        }
+        
+        # Get data from TradingView
+        logger.info(f"Fetching calendar data from TradingView for {today}")
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                url,
-                headers=headers,
-                params={
-                    "date": today,
-                    "market_open": "true"  # Only get events during market hours
-                }
-            )
+            response = await client.post(url, headers=headers, json=body)
             response.raise_for_status()
             data = response.json()
             
-            logger.info(f"Received {len(data)} events from Forex Factory")
+            logger.info(f"Received {len(data.get('data', []))} events from TradingView")
             
             # Convert to our format
             events = []
-            for event in data:
+            for event in data.get('data', []):
                 try:
                     # Extract time in UTC
-                    event_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
+                    event_time = datetime.fromtimestamp(event['d'][0], pytz.UTC)
                     
-                    # Convert impact level
-                    impact_map = {
-                        "High": "🔴",
-                        "Medium": "🟡",
-                        "Low": "🟢"
+                    # Map country to currency
+                    country_to_currency = {
+                        "US": "USD", "EU": "EUR", "GB": "GBP", "JP": "JPY",
+                        "AU": "AUD", "CA": "CAD", "CH": "CHF", "NZ": "NZD"
                     }
+                    
+                    # Determine impact based on importance
+                    importance = event['d'][3]  # 0-100 scale
+                    if importance >= 70:
+                        impact = "🔴"
+                    elif importance >= 40:
+                        impact = "🟡"
+                    else:
+                        impact = "🟢"
                     
                     # Format the event
                     formatted_event = {
                         "time": event_time.strftime("%H:%M"),
-                        "currency": event.get('currency', 'OTHER'),
-                        "impact": impact_map.get(event.get('impact', 'Low'), '🟢'),
-                        "event": event.get('title', 'Unknown Event'),
-                        "actual": event.get('actual', None),
-                        "forecast": event.get('forecast', None)
+                        "currency": country_to_currency.get(event['d'][1], 'OTHER'),
+                        "impact": impact,
+                        "event": event['d'][2],  # Event name
+                        "actual": event['d'][4] if len(event['d']) > 4 else None,
+                        "forecast": event['d'][5] if len(event['d']) > 5 else None
                     }
                     
                     # Only add events that haven't happened yet
