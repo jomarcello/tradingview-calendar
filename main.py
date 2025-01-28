@@ -13,7 +13,15 @@ import httpx
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Log to console
+        logging.handlers.RotatingFileHandler(
+            '/tmp/economic_calendar.log',  # Use /tmp for Railway
+            maxBytes=10485760,  # 10MB
+            backupCount=5
+        )
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -30,6 +38,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Log when the application starts"""
+    logger.info("Economic Calendar Service starting up")
+    logger.info(f"Current time: {datetime.now(pytz.UTC)}")
 
 # Sample economic events database
 ECONOMIC_EVENTS = {
@@ -233,6 +247,7 @@ async def get_calendar():
         # Send to Telegram
         result = await send_to_telegram(formatted_events)
         if result.get("status") == "error":
+            logger.error(f"Failed to send to Telegram: {result.get('detail')}")
             return result
             
         return {"status": "success", "events": formatted_events}
