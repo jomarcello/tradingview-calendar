@@ -8,10 +8,20 @@ import os
 from openai import OpenAI
 
 app = FastAPI()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Initialize OpenAI client only if API key is available
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 async def format_with_ai(events: List[Dict]) -> str:
     try:
+        if not client:
+            # Fallback formatting if no OpenAI key is available
+            return "\n".join([
+                f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
+                for event in events
+            ])
+
         # Create a prompt for GPT
         events_text = "\n".join([
             f"Time: {event['time']}, Currency: {event['currency']}, "
@@ -39,6 +49,7 @@ Only include time, event name, and impact level."""
         
         return response.choices[0].message.content
     except Exception as e:
+        # Fallback formatting if OpenAI call fails
         return "\n".join([
             f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
             for event in events
