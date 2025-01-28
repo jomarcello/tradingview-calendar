@@ -11,6 +11,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import traceback
 import asyncio
+import json
 
 # Setup logging
 logging.basicConfig(
@@ -58,7 +59,8 @@ async def format_with_ai(events: List[Dict]) -> str:
         # Create a prompt for GPT
         events_text = "\n".join([
             f"Time: {event['time']}, Currency: {event['currency']}, "
-            f"Impact: {event['impact']}, Event: {event['event']}"
+            f"Impact: {event['impact']}, Event: {event['event']}, "
+            f"Actual: {event.get('actual', 'N/A')}, Forecast: {event.get('forecast', 'N/A')}"
             for event in events
         ])
         
@@ -68,7 +70,8 @@ async def format_with_ai(events: List[Dict]) -> str:
 Format this into a clear, concise summary. Focus on high-impact events.
 Group by currency. Keep it brief but informative.
 Use emojis for better readability.
-Only include time, event name, and impact level."""
+Include actual and forecast values if available.
+Format times in 24-hour format."""
 
         logger.info("Sending request to OpenAI")
         response = await client.chat.completions.create(
@@ -88,12 +91,18 @@ Only include time, event name, and impact level."""
         logger.error(f"Traceback: {traceback.format_exc()}")
         # Fallback formatting if OpenAI call fails
         return "\n".join([
-            f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
+            f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n"
+            f"📊 {event['event']}\n"
+            f"📈 Actual: {event.get('actual', 'N/A')} | Forecast: {event.get('forecast', 'N/A')}\n"
             for event in events
         ])
 
-async def fetch_forex_factory_data() -> List[Dict]:
-    url = "https://www.forexfactory.com/calendar"  # Use specific calendar URL
+async def fetch_economic_calendar_data() -> List[Dict]:
+    # Get current date in UTC
+    now = datetime.now(pytz.UTC)
+    date_str = now.strftime("%Y-%m-%d")
+    
+    url = f"https://www.fxstreet.com/economic-calendar/calendar?date={date_str}"
     logger.info(f"Fetching data from {url}")
     
     headers = {
@@ -102,11 +111,7 @@ async def fetch_forex_factory_data() -> List[Dict]:
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1'
+        'Upgrade-Insecure-Requests': '1'
     }
     
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -120,68 +125,68 @@ async def fetch_forex_factory_data() -> List[Dict]:
             logger.info(f"Response headers: {dict(response.headers)}")
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            calendar_table = soup.find('table', class_='calendar__table')
             
-            if not calendar_table:
-                logger.error("Failed to find calendar table in response")
-                logger.error(f"Response content: {response.text[:1000]}...")  # Log first 1000 chars
-                raise HTTPException(status_code=500, detail="Failed to find calendar table")
-            
+            # Find all event rows
             events = []
-            current_date = None
+            event_rows = soup.find_all('div', class_='fxs_event_row')
             
-            for row in calendar_table.find_all('tr', class_=['calendar__row', 'calendar_row']):
+            for row in event_rows:
                 try:
-                    # Check for date row
-                    date_cell = row.find('td', class_='calendar__cell--date')
-                    if date_cell and date_cell.text.strip():
-                        current_date = date_cell.text.strip()
+                    # Get time (in UTC)
+                    time_elem = row.find('time')
+                    if not time_elem:
                         continue
+                    event_time = time_elem.get('datetime', '').split('T')[1][:5]  # Get HH:MM from datetime
                     
-                    # Get event details
-                    time_cell = row.find('td', class_='calendar__cell--time')
-                    currency_cell = row.find('td', class_='calendar__cell--currency')
-                    impact_cell = row.find('td', class_='calendar__cell--impact')
-                    event_cell = row.find('td', class_='calendar__cell--event')
+                    # Get currency
+                    currency_elem = row.find('span', class_='fxs_flag_name')
+                    if not currency_elem:
+                        continue
+                    currency = currency_elem.text.strip()
                     
-                    if all([time_cell, currency_cell, impact_cell, event_cell]):
-                        time = time_cell.text.strip()
-                        currency = currency_cell.text.strip()
-                        
-                        # Determine impact level
-                        impact_spans = impact_cell.find_all('span')
-                        impact = len([span for span in impact_spans if 'high' in span.get('class', [])])
-                        impact_level = '🔴' if impact == 3 else '🟡' if impact == 2 else '🟢' if impact == 1 else '⚪️'
-                        
-                        event = event_cell.text.strip()
-                        
-                        if current_date and time and currency and event:
-                            events.append({
-                                "date": current_date,
-                                "time": time,
-                                "currency": currency,
-                                "impact": impact_level,
-                                "event": event
-                            })
+                    # Get event name
+                    event_elem = row.find('h4', class_='fxs_headline')
+                    if not event_elem:
+                        continue
+                    event = event_elem.text.strip()
+                    
+                    # Get impact
+                    impact_elem = row.find('span', class_='fxs_impact_bull')
+                    impact = len(impact_elem.find_all('i', class_='fa-circle')) if impact_elem else 0
+                    impact_level = '🔴' if impact == 3 else '🟡' if impact == 2 else '🟢' if impact == 1 else '⚪️'
+                    
+                    # Get actual and forecast values
+                    actual = row.find('span', class_='fxs_actualValue')
+                    forecast = row.find('span', class_='fxs_forecastValue')
+                    
+                    events.append({
+                        "time": event_time,
+                        "currency": currency,
+                        "impact": impact_level,
+                        "event": event,
+                        "actual": actual.text.strip() if actual else None,
+                        "forecast": forecast.text.strip() if forecast else None
+                    })
+                    
                 except Exception as e:
                     logger.error(f"Error processing row: {str(e)}")
                     logger.error(f"Row content: {row}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
             
-            logger.info(f"Found {len(events)} events")
+            logger.info(f"Found {len(events)} events for {date_str}")
             return events
             
         except Exception as e:
             logger.error(f"Error fetching data: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Failed to fetch Forex Factory data: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch economic calendar data: {str(e)}")
 
 @app.get("/calendar")
 async def get_economic_calendar():
     try:
         logger.info("Getting economic calendar")
-        events = await fetch_forex_factory_data()
+        events = await fetch_economic_calendar_data()
         formatted_text = await format_with_ai(events)
         
         return {
