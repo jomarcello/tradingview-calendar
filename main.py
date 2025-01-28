@@ -11,8 +11,6 @@ from logging.handlers import RotatingFileHandler
 import traceback
 import asyncio
 import json
-import feedparser
-import re
 
 # Setup logging
 logging.basicConfig(
@@ -45,30 +43,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 logger.info(f"OPENAI_API_KEY present: {OPENAI_API_KEY is not None}")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 logger.info(f"OpenAI client initialized: {client is not None}")
-
-def extract_currency(title: str) -> str:
-    """Extract currency from event title."""
-    currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
-    for currency in currencies:
-        if currency in title:
-            return currency
-    return "OTHER"
-
-def determine_impact(title: str, description: str) -> str:
-    """Determine impact level based on keywords."""
-    high_impact = ["NFP", "CPI", "GDP", "PMI", "Rate Decision", "Employment"]
-    medium_impact = ["Retail Sales", "Trade Balance", "Manufacturing", "Consumer"]
-    
-    title_upper = title.upper()
-    desc_upper = description.upper()
-    
-    for term in high_impact:
-        if term.upper() in title_upper or term.upper() in desc_upper:
-            return "🔴"
-    for term in medium_impact:
-        if term.upper() in title_upper or term.upper() in desc_upper:
-            return "🟡"
-    return "🟢"
 
 async def format_with_ai(events: List[Dict]) -> str:
     try:
@@ -124,54 +98,82 @@ Format times in 24-hour format."""
             for event in events
         ])
 
+def determine_impact(event: Dict) -> str:
+    """Determine impact level based on importance."""
+    importance = event.get('importance', 0)
+    return '🔴' if importance >= 3 else '🟡' if importance == 2 else '🟢'
+
 async def fetch_economic_calendar_data() -> List[Dict]:
     try:
         # Get current date in UTC
         now = datetime.now(pytz.UTC)
         today = now.strftime("%Y-%m-%d")
         
-        # Investing.com Economic Calendar RSS feed
-        url = "https://www.investing.com/rss/economic_calendar.rss"
+        # TradingEconomics Calendar API
+        url = f"https://api.tradingeconomics.com/calendar/country/all/{today}"
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': 'Client guest:guest'  # Using public guest access
+        }
+        
         logger.info(f"Fetching data from {url}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
             
-            # Parse RSS feed
-            feed = feedparser.parse(response.text)
-            logger.info(f"Received {len(feed.entries)} entries from RSS feed")
+            data = response.json()
+            logger.info(f"Received {len(data)} events from API")
+            
+            # Filter for major currencies
+            major_currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
             
             events = []
-            for entry in feed.entries:
+            for event in data:
                 try:
-                    # Parse event time
-                    event_time = datetime.strptime(entry.published, "%a, %d %b %Y %H:%M:%S %z")
+                    # Extract currency from country
+                    country = event.get('Country', '')
+                    currency = None
                     
-                    # Only include events from today
-                    if event_time.strftime("%Y-%m-%d") != today:
+                    # Map countries to currencies
+                    if "United States" in country:
+                        currency = "USD"
+                    elif "Euro Area" in country or "European Union" in country:
+                        currency = "EUR"
+                    elif "United Kingdom" in country:
+                        currency = "GBP"
+                    elif "Japan" in country:
+                        currency = "JPY"
+                    elif "Australia" in country:
+                        currency = "AUD"
+                    elif "Canada" in country:
+                        currency = "CAD"
+                    elif "Switzerland" in country:
+                        currency = "CHF"
+                    elif "New Zealand" in country:
+                        currency = "NZD"
+                    
+                    if currency not in major_currencies:
                         continue
                     
-                    # Extract event details
-                    currency = extract_currency(entry.title)
-                    impact = determine_impact(entry.title, entry.description)
+                    # Convert event time to UTC
+                    event_time = datetime.strptime(event['Date'], "%Y-%m-%dT%H:%M:%S")
                     
-                    # Try to extract actual and forecast values from description
-                    actual_match = re.search(r"Actual: ([^,]+)", entry.description)
-                    forecast_match = re.search(r"Forecast: ([^,]+)", entry.description)
+                    # Determine impact level based on importance
+                    impact = determine_impact(event)
                     
                     events.append({
                         "time": event_time.strftime("%H:%M"),
                         "currency": currency,
                         "impact": impact,
-                        "event": entry.title,
-                        "actual": actual_match.group(1) if actual_match else None,
-                        "forecast": forecast_match.group(1) if forecast_match else None
+                        "event": event['Event'],
+                        "actual": event.get('Actual'),
+                        "forecast": event.get('Forecast')
                     })
                     
                 except Exception as e:
-                    logger.error(f"Error processing entry: {str(e)}")
-                    logger.error(f"Entry data: {entry}")
+                    logger.error(f"Error processing event: {str(e)}")
+                    logger.error(f"Event data: {event}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
             
