@@ -260,7 +260,13 @@ async def get_calendar():
 
 @app.get("/")
 async def root():
-    return {"status": "success", "message": "Economic Calendar Service is running"}
+    """Root endpoint to check if service is running"""
+    logger.info("Root endpoint called")
+    return {
+        "status": "success",
+        "message": "Economic Calendar Service is running",
+        "time": datetime.now(pytz.UTC).isoformat()
+    }
 
 if __name__ == "__main__":
     import uvicorn
