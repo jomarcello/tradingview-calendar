@@ -161,6 +161,7 @@ async def send_to_telegram(events: List[str]):
         logger.info(f"Sending to Telegram: {message}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info(f"Making request to {telegram_url}")
             response = await client.post(
                 telegram_url,
                 json={
@@ -169,14 +170,18 @@ async def send_to_telegram(events: List[str]):
                     "chat_id": "-1002047725461"
                 }
             )
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response text: {response.text}")
+            
             response.raise_for_status()
-            logger.info(f"Telegram response: {response.text}")
             logger.info("Successfully sent events to Telegram")
+            return {"status": "success"}
             
     except Exception as e:
-        logger.error(f"Error sending to Telegram: {str(e)}")
+        error_msg = f"Error sending to Telegram: {str(e)}"
+        logger.error(error_msg)
         logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Failed to send to Telegram: {str(e)}")
+        return {"status": "error", "detail": error_msg}
 
 @app.get("/calendar")
 async def get_calendar():
@@ -188,7 +193,9 @@ async def get_calendar():
         if not events:
             message = ["No economic events found for today."]
             logger.info(f"No events found, sending message: {message}")
-            await send_to_telegram(message)
+            result = await send_to_telegram(message)
+            if result.get("status") == "error":
+                return result
             return {"status": "success", "events": message}
             
         # Format events for display
@@ -224,13 +231,16 @@ async def get_calendar():
         logger.info(f"Formatted events: {formatted_events}")
         
         # Send to Telegram
-        await send_to_telegram(formatted_events)
-        
+        result = await send_to_telegram(formatted_events)
+        if result.get("status") == "error":
+            return result
+            
         return {"status": "success", "events": formatted_events}
         
     except Exception as e:
-        error_msg = f"Error in get_calendar: {str(e)}\nTraceback: {traceback.format_exc()}"
+        error_msg = f"Error in get_calendar: {str(e)}"
         logger.error(error_msg)
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "detail": error_msg}
 
 @app.get("/")
