@@ -58,7 +58,7 @@ async def format_with_ai(events: List[Dict]) -> str:
     formatted_parts = []
     for currency, currency_events in sorted(events_by_currency.items()):
         # Add currency header
-        formatted_parts.append(f"💱 {currency} Events:")
+        formatted_parts.append(f"*{currency} Events*")
         
         # Sort events by time
         currency_events.sort(key=lambda x: x['time'])
@@ -73,8 +73,8 @@ async def format_with_ai(events: List[Dict]) -> str:
             
             formatted_parts.append(
                 f"🕒 {time} {impact}\n"
-                f"📊 {event_name}\n"
-                f"📈 Forecast: {forecast}\n"
+                f"{event_name}\n"
+                f"Forecast: {forecast}"
             )
         
         formatted_parts.append("")  # Add blank line between currency groups
