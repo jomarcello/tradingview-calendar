@@ -4,8 +4,45 @@ import httpx
 from datetime import datetime, timedelta
 import pytz
 from typing import List, Dict, Optional
+import os
+from openai import OpenAI
 
 app = FastAPI()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+async def format_with_ai(events: List[Dict]) -> str:
+    try:
+        # Create a prompt for GPT
+        events_text = "\n".join([
+            f"Time: {event['time']}, Currency: {event['currency']}, "
+            f"Impact: {event['impact']}, Event: {event['event']}"
+            for event in events
+        ])
+        
+        prompt = f"""Here are today's economic events:
+{events_text}
+
+Format this into a clear, concise summary. Focus on high-impact events.
+Group by currency. Keep it brief but informative.
+Use emojis for better readability.
+Only include time, event name, and impact level."""
+
+        response = await client.chat.completions.create(
+            model="gpt-4-1106-preview",
+            messages=[
+                {"role": "system", "content": "You are a forex economic calendar assistant. Be concise and clear."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        return "\n".join([
+            f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
+            for event in events
+        ])
 
 async def fetch_forex_factory_data() -> List[Dict]:
     url = "https://www.forexfactory.com"
@@ -63,22 +100,11 @@ async def fetch_forex_factory_data() -> List[Dict]:
 async def get_economic_calendar():
     try:
         events = await fetch_forex_factory_data()
-        
-        # Format the response
-        formatted_events = []
-        for event in events:
-            formatted_event = (
-                f"🕒 {event['time']}\n"
-                f"💱 {event['currency']}\n"
-                f"📊 Impact: {event['impact']}\n"
-                f"📰 {event['event']}\n"
-                f"───────────────"
-            )
-            formatted_events.append(formatted_event)
+        formatted_text = await format_with_ai(events)
         
         return {
             "status": "success",
-            "events": formatted_events
+            "events": [formatted_text]  # Now returning a single formatted string
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
