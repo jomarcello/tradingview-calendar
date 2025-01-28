@@ -7,6 +7,7 @@ import asyncio
 import json
 import time
 import re
+from typing import List, Dict
 
 # Setup logging
 logging.basicConfig(
