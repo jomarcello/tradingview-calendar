@@ -8,6 +8,7 @@ import os
 from openai import OpenAI
 import logging
 from logging.handlers import RotatingFileHandler
+import traceback
 
 # Setup logging
 logging.basicConfig(
@@ -28,6 +29,7 @@ app = FastAPI()
 
 # Initialize OpenAI client only if API key is available
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+logger.info(f"OPENAI_API_KEY present: {OPENAI_API_KEY is not None}")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 logger.info(f"OpenAI client initialized: {client is not None}")
 
@@ -72,6 +74,7 @@ Only include time, event name, and impact level."""
         return response.choices[0].message.content
     except Exception as e:
         logger.error(f"Error in format_with_ai: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         # Fallback formatting if OpenAI call fails
         return "\n".join([
             f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
@@ -86,12 +89,14 @@ async def fetch_forex_factory_data() -> List[Dict]:
         try:
             response = await client.get(url)
             response.raise_for_status()
+            logger.info(f"Got response from {url}, status: {response.status_code}")
             
             soup = BeautifulSoup(response.text, 'html.parser')
             calendar_table = soup.find('table', class_='calendar__table')
             
             if not calendar_table:
                 logger.error("Failed to find calendar table in response")
+                logger.error(f"Response content: {response.text[:500]}...")  # Log first 500 chars
                 raise HTTPException(status_code=500, detail="Failed to find calendar table")
             
             events = []
@@ -132,6 +137,8 @@ async def fetch_forex_factory_data() -> List[Dict]:
                             })
                 except Exception as e:
                     logger.error(f"Error processing row: {str(e)}")
+                    logger.error(f"Row content: {row}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
             
             logger.info(f"Found {len(events)} events")
@@ -139,6 +146,7 @@ async def fetch_forex_factory_data() -> List[Dict]:
             
         except Exception as e:
             logger.error(f"Error fetching data: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Failed to fetch Forex Factory data: {str(e)}")
 
 @app.get("/calendar")
@@ -154,6 +162,7 @@ async def get_economic_calendar():
         }
     except Exception as e:
         logger.error(f"Error in get_economic_calendar: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
