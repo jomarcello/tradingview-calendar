@@ -45,58 +45,41 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 logger.info(f"OpenAI client initialized: {client is not None}")
 
 async def format_with_ai(events: List[Dict]) -> str:
-    try:
-        if not client:
-            logger.warning("No OpenAI client available, using fallback formatting")
-            # Fallback formatting if no OpenAI key is available
-            return "\n".join([
-                f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n"
-                f"📊 {event['event']}\n"
-                f"📈 Actual: {event.get('actual', 'N/A')} | Forecast: {event.get('forecast', 'N/A')}\n"
-                for event in events
-            ])
-
-        logger.info("Formatting events with OpenAI")
-        # Create a prompt for GPT
-        events_text = "\n".join([
-            f"Time: {event['time']}, Currency: {event['currency']}, "
-            f"Impact: {event['impact']}, Event: {event['event']}, "
-            f"Actual: {event.get('actual', 'N/A')}, Forecast: {event.get('forecast', 'N/A')}"
-            for event in events
-        ])
+    """Format events without using OpenAI."""
+    # Group events by currency
+    events_by_currency = {}
+    for event in events:
+        currency = event['currency']
+        if currency not in events_by_currency:
+            events_by_currency[currency] = []
+        events_by_currency[currency].append(event)
+    
+    # Format each currency group
+    formatted_parts = []
+    for currency, currency_events in sorted(events_by_currency.items()):
+        # Add currency header
+        formatted_parts.append(f"💱 {currency} Events:")
         
-        prompt = f"""Here are today's economic events:
-{events_text}
-
-Format this into a clear, concise summary. Focus on high-impact events.
-Group by currency. Keep it brief but informative.
-Use emojis for better readability.
-Include actual and forecast values if available.
-Format times in 24-hour format."""
-
-        logger.info("Sending request to OpenAI")
-        response = await client.chat.completions.create(
-            model="gpt-4-1106-preview",
-            messages=[
-                {"role": "system", "content": "You are a forex economic calendar assistant. Be concise and clear."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        logger.info("Received response from OpenAI")
+        # Sort events by time
+        currency_events.sort(key=lambda x: x['time'])
         
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error in format_with_ai: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Fallback formatting if OpenAI call fails
-        return "\n".join([
-            f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n"
-            f"📊 {event['event']}\n"
-            f"📈 Actual: {event.get('actual', 'N/A')} | Forecast: {event.get('forecast', 'N/A')}\n"
-            for event in events
-        ])
+        # Format each event
+        for event in currency_events:
+            time = event['time']
+            impact = event['impact']
+            event_name = event['event']
+            actual = event.get('actual', 'N/A')
+            forecast = event.get('forecast', 'N/A')
+            
+            formatted_parts.append(
+                f"🕒 {time} {impact}\n"
+                f"📊 {event_name}\n"
+                f"📈 Forecast: {forecast}\n"
+            )
+        
+        formatted_parts.append("")  # Add blank line between currency groups
+    
+    return "\n".join(formatted_parts)
 
 def determine_impact(event: Dict) -> str:
     """Determine impact level based on importance and event name."""
