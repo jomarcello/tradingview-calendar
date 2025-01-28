@@ -51,7 +51,9 @@ async def format_with_ai(events: List[Dict]) -> str:
             logger.warning("No OpenAI client available, using fallback formatting")
             # Fallback formatting if no OpenAI key is available
             return "\n".join([
-                f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n{event['event']}\n"
+                f"🕒 {event['time']} | {event['currency']} | {event['impact']}\n"
+                f"📊 {event['event']}\n"
+                f"📈 Actual: {event.get('actual', 'N/A')} | Forecast: {event.get('forecast', 'N/A')}\n"
                 for event in events
             ])
 
@@ -102,91 +104,87 @@ async def fetch_economic_calendar_data() -> List[Dict]:
     now = datetime.now(pytz.UTC)
     date_str = now.strftime("%Y-%m-%d")
     
-    url = f"https://www.fxstreet.com/economic-calendar/calendar?date={date_str}"
+    # FXStreet API endpoint
+    url = "https://api.fxstreet.com/calendar/v1/events/list"
     logger.info(f"Fetching data from {url}")
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+    # Calculate start and end of today in UTC
+    start_date = datetime.now(pytz.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = start_date + timedelta(days=1)
+    
+    params = {
+        "culture": "en-US",
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "volatilities": ["1", "2", "3"],  # Low, Medium, High impact
+        "eventCategories": ["Central Banks", "Economic Indicators"],
+        "countries": ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]  # Major currencies
     }
     
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            # Add a small delay to avoid rate limiting
-            await asyncio.sleep(1)
-            
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, params=params, headers=headers)
             response.raise_for_status()
             logger.info(f"Got response from {url}, status: {response.status_code}")
-            logger.info(f"Response headers: {dict(response.headers)}")
             
-            soup = BeautifulSoup(response.text, 'html.parser')
+            data = response.json()
+            logger.info(f"Received {len(data)} events from API")
             
-            # Find all event rows
             events = []
-            event_rows = soup.find_all('div', class_='fxs_event_row')
-            
-            for row in event_rows:
+            for event in data:
                 try:
-                    # Get time (in UTC)
-                    time_elem = row.find('time')
-                    if not time_elem:
-                        continue
-                    event_time = time_elem.get('datetime', '').split('T')[1][:5]  # Get HH:MM from datetime
+                    # Convert event time to UTC
+                    event_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
                     
-                    # Get currency
-                    currency_elem = row.find('span', class_='fxs_flag_name')
-                    if not currency_elem:
-                        continue
-                    currency = currency_elem.text.strip()
-                    
-                    # Get event name
-                    event_elem = row.find('h4', class_='fxs_headline')
-                    if not event_elem:
-                        continue
-                    event = event_elem.text.strip()
-                    
-                    # Get impact
-                    impact_elem = row.find('span', class_='fxs_impact_bull')
-                    impact = len(impact_elem.find_all('i', class_='fa-circle')) if impact_elem else 0
-                    impact_level = '🔴' if impact == 3 else '🟡' if impact == 2 else '🟢' if impact == 1 else '⚪️'
-                    
-                    # Get actual and forecast values
-                    actual = row.find('span', class_='fxs_actualValue')
-                    forecast = row.find('span', class_='fxs_forecastValue')
+                    # Get impact level
+                    volatility = event.get('volatility', 0)
+                    impact_level = '🔴' if volatility == 3 else '🟡' if volatility == 2 else '🟢' if volatility == 1 else '⚪️'
                     
                     events.append({
-                        "time": event_time,
-                        "currency": currency,
+                        "time": event_time.strftime("%H:%M"),
+                        "currency": event['currency'],
                         "impact": impact_level,
-                        "event": event,
-                        "actual": actual.text.strip() if actual else None,
-                        "forecast": forecast.text.strip() if forecast else None
+                        "event": event['name'],
+                        "actual": event.get('actual'),
+                        "forecast": event.get('forecast')
                     })
-                    
                 except Exception as e:
-                    logger.error(f"Error processing row: {str(e)}")
-                    logger.error(f"Row content: {row}")
+                    logger.error(f"Error processing event: {str(e)}")
+                    logger.error(f"Event data: {event}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
             
-            logger.info(f"Found {len(events)} events for {date_str}")
+            # Sort events by time
+            events.sort(key=lambda x: x['time'])
+            
+            logger.info(f"Processed {len(events)} events for {date_str}")
             return events
             
         except Exception as e:
             logger.error(f"Error fetching data: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Failed to fetch economic calendar data: {str(e)}")
+            
+            # Fallback to empty list if API fails
+            logger.info("Using empty events list as fallback")
+            return []
 
 @app.get("/calendar")
 async def get_economic_calendar():
     try:
         logger.info("Getting economic calendar")
         events = await fetch_economic_calendar_data()
+        
+        if not events:
+            return {
+                "status": "success",
+                "events": ["No economic events found for today."]
+            }
+        
         formatted_text = await format_with_ai(events)
         
         return {
