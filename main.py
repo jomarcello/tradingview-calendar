@@ -155,7 +155,7 @@ async def fetch_economic_calendar_data() -> List[Dict]:
 async def send_to_telegram(events: List[str]):
     """Send events to Telegram service"""
     try:
-        telegram_url = "https://tradingview-telegram-service-production.up.railway.app/api/send_message"
+        telegram_url = "https://tradingview-telegram-service-production.up.railway.app/send-signal"
         message = "\n".join(events)
         
         logger.info(f"Sending to Telegram: {message}")
@@ -165,8 +165,10 @@ async def send_to_telegram(events: List[str]):
             response = await client.post(
                 telegram_url,
                 json={
-                    "message": message,
-                    "parse_mode": "HTML",
+                    "signal_data": {
+                        "message": message,
+                        "parse_mode": "HTML"
+                    },
                     "chat_id": "-1002047725461"
                 }
             )
