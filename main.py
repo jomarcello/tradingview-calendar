@@ -155,7 +155,7 @@ async def fetch_economic_calendar_data() -> List[Dict]:
 async def send_to_telegram(events: List[str]):
     """Send events to Telegram service"""
     try:
-        telegram_url = "https://tradingview-telegram-service-production.up.railway.app/send_message"
+        telegram_url = "https://tradingview-telegram-service-production.up.railway.app/telegram/send_message"
         message = "\n".join(events)
         
         logger.info(f"Sending to Telegram: {message}")
@@ -166,7 +166,7 @@ async def send_to_telegram(events: List[str]):
                 json={
                     "message": message,
                     "parse_mode": "HTML",
-                    "chat_id": "-1002047725461"  
+                    "chat_id": "-1002047725461"
                 }
             )
             response.raise_for_status()
@@ -181,10 +181,13 @@ async def send_to_telegram(events: List[str]):
 @app.get("/calendar")
 async def get_calendar():
     try:
+        logger.info("Starting calendar request")
         events = await fetch_economic_calendar_data()
+        logger.info(f"Fetched events: {events}")
         
         if not events:
             message = ["No economic events found for today."]
+            logger.info(f"No events found, sending message: {message}")
             await send_to_telegram(message)
             return {"status": "success", "events": message}
             
@@ -198,6 +201,8 @@ async def get_calendar():
             if currency not in events_by_currency:
                 events_by_currency[currency] = []
             events_by_currency[currency].append(event)
+        
+        logger.info(f"Grouped events by currency: {events_by_currency}")
         
         # Format each currency group
         for currency, currency_events in events_by_currency.items():
@@ -224,9 +229,9 @@ async def get_calendar():
         return {"status": "success", "events": formatted_events}
         
     except Exception as e:
-        logger.error(f"Error in get_calendar: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = f"Error in get_calendar: {str(e)}\nTraceback: {traceback.format_exc()}"
+        logger.error(error_msg)
+        return {"status": "error", "detail": error_msg}
 
 @app.get("/")
 async def root():
