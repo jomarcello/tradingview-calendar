@@ -9,21 +9,18 @@ import time
 import re
 from typing import List, Dict
 import httpx
+from pythonjsonlogger import jsonlogger
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Log to console
-        logging.handlers.RotatingFileHandler(
-            '/tmp/economic_calendar.log',  # Use /tmp for Railway
-            maxBytes=10485760,  # 10MB
-            backupCount=5
-        )
-    ]
+logger = logging.getLogger()
+logHandler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter(
+    fmt='%(asctime)s %(levelname)s %(name)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
-logger = logging.getLogger(__name__)
+logHandler.setFormatter(formatter)
+logger.addHandler(logHandler)
+logger.setLevel(logging.INFO)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,8 +39,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Log when the application starts"""
-    logger.info("Economic Calendar Service starting up")
-    logger.info(f"Current time: {datetime.now(pytz.UTC)}")
+    logger.info("Economic Calendar Service starting up", extra={
+        "event": "startup",
+        "time": datetime.now(pytz.UTC).isoformat()
+    })
 
 # Sample economic events database
 ECONOMIC_EVENTS = {
@@ -158,12 +157,12 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         for event in upcoming_events:
             event['impact'] = determine_impact(event)
         
-        logger.info(f"Found {len(upcoming_events)} upcoming events for {today}")
+        logger.info("Found upcoming events", extra={"count": len(upcoming_events), "date": today})
         return upcoming_events
             
     except Exception as e:
-        logger.error(f"Error fetching calendar data: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error("Error fetching calendar data", extra={"error": str(e)})
+        logger.error("Traceback: " + traceback.format_exc())
         return []
 
 async def send_to_telegram(events: List[str]):
@@ -172,10 +171,10 @@ async def send_to_telegram(events: List[str]):
         telegram_url = "https://tradingview-telegram-service-production.up.railway.app/send-calendar"
         message = "\n".join(events)
         
-        logger.info(f"Sending to Telegram: {message}")
+        logger.info("Sending to Telegram", extra={"message": message})
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            logger.info(f"Making request to {telegram_url}")
+            logger.info("Making request to " + telegram_url)
             response = await client.post(
                 telegram_url,
                 json={
@@ -184,17 +183,17 @@ async def send_to_telegram(events: List[str]):
                     "chat_id": "2004519703"  # Correct chat ID
                 }
             )
-            logger.info(f"Response status: {response.status_code}")
-            logger.info(f"Response text: {response.text}")
+            logger.info("Response status: " + str(response.status_code))
+            logger.info("Response text: " + response.text)
             
             response.raise_for_status()
             logger.info("Successfully sent events to Telegram")
             return {"status": "success"}
             
     except Exception as e:
-        error_msg = f"Error sending to Telegram: {str(e)}"
+        error_msg = "Error sending to Telegram: " + str(e)
         logger.error(error_msg)
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error("Traceback: " + traceback.format_exc())
         return {"status": "error", "detail": error_msg}
 
 @app.get("/calendar")
@@ -202,11 +201,11 @@ async def get_calendar():
     try:
         logger.info("Starting calendar request")
         events = await fetch_economic_calendar_data()
-        logger.info(f"Fetched events: {events}")
+        logger.info("Fetched events", extra={"count": len(events)})
         
         if not events:
             message = ["No economic events found for today."]
-            logger.info(f"No events found, sending message: {message}")
+            logger.info("No events found, sending message", extra={"message": message})
             result = await send_to_telegram(message)
             if result.get("status") == "error":
                 return result
@@ -223,7 +222,7 @@ async def get_calendar():
                 events_by_currency[currency] = []
             events_by_currency[currency].append(event)
         
-        logger.info(f"Grouped events by currency: {events_by_currency}")
+        logger.info("Grouped events by currency", extra={"currencies": list(events_by_currency.keys())})
         
         # Format each currency group
         for currency, currency_events in events_by_currency.items():
@@ -242,20 +241,20 @@ async def get_calendar():
                 formatted_events.append(formatted_event)
         
         # Log the formatted events
-        logger.info(f"Formatted events: {formatted_events}")
+        logger.info("Formatted events", extra={"count": len(formatted_events)})
         
         # Send to Telegram
         result = await send_to_telegram(formatted_events)
         if result.get("status") == "error":
-            logger.error(f"Failed to send to Telegram: {result.get('detail')}")
+            logger.error("Failed to send to Telegram", extra={"error": result.get('detail')})
             return result
             
         return {"status": "success", "events": formatted_events}
         
     except Exception as e:
-        error_msg = f"Error in get_calendar: {str(e)}"
+        error_msg = "Error in get_calendar: " + str(e)
         logger.error(error_msg)
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error("Traceback: " + traceback.format_exc())
         return {"status": "error", "detail": error_msg}
 
 @app.get("/")
