@@ -167,7 +167,7 @@ async def send_to_telegram(events: List[str]):
                 json={
                     "message": message,
                     "parse_mode": "HTML",
-                    "chat_id": "-1002047725461"  # This will be converted to int by the Telegram service
+                    "chat_id": "2004519703"  # Correct chat ID
                 }
             )
             logger.info(f"Response status: {response.status_code}")
