@@ -103,50 +103,71 @@ async def fetch_economic_calendar_data() -> List[Dict]:
         now = datetime.now(pytz.UTC)
         today = now.strftime("%Y-%m-%d")
         
-        # Hardcoded events for testing
-        events = [
-            {
-                "time": "09:00",
-                "currency": "EUR",
-                "impact": "🔴",
-                "event": "ECB President Lagarde Speech",
-                "actual": None,
-                "forecast": None
-            },
-            {
-                "time": "10:30",
-                "currency": "GBP",
-                "impact": "🟡",
-                "event": "UK Manufacturing PMI",
-                "actual": None,
-                "forecast": "49.8"
-            },
-            {
-                "time": "14:30",
-                "currency": "USD",
-                "impact": "🔴",
-                "event": "Core PCE Price Index m/m",
-                "actual": None,
-                "forecast": "0.2%"
-            },
-            {
-                "time": "16:00",
-                "currency": "USD",
-                "impact": "🟡",
-                "event": "Pending Home Sales m/m",
-                "actual": None,
-                "forecast": "1.3%"
-            }
-        ]
+        # Forex Factory API endpoint
+        url = "https://api.forexfactory.com/v1/calendar"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer hJHcmLky.PO2xWR4aTrQXnUuS2BZLegzPTEnKidy2"
+        }
         
-        # Sort events by time
-        events.sort(key=lambda x: x['time'])
-        
-        logger.info(f"Using {len(events)} sample events for {today}")
-        return events
+        # Get data from Forex Factory
+        logger.info(f"Fetching calendar data from Forex Factory for {today}")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                url,
+                headers=headers,
+                params={
+                    "date": today,
+                    "market_open": "true"  # Only get events during market hours
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            logger.info(f"Received {len(data)} events from Forex Factory")
+            
+            # Convert to our format
+            events = []
+            for event in data:
+                try:
+                    # Extract time in UTC
+                    event_time = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
+                    
+                    # Convert impact level
+                    impact_map = {
+                        "High": "🔴",
+                        "Medium": "🟡",
+                        "Low": "🟢"
+                    }
+                    
+                    # Format the event
+                    formatted_event = {
+                        "time": event_time.strftime("%H:%M"),
+                        "currency": event.get('currency', 'OTHER'),
+                        "impact": impact_map.get(event.get('impact', 'Low'), '🟢'),
+                        "event": event.get('title', 'Unknown Event'),
+                        "actual": event.get('actual', None),
+                        "forecast": event.get('forecast', None)
+                    }
+                    
+                    # Only add events that haven't happened yet
+                    if event_time > now:
+                        events.append(formatted_event)
+                        logger.info(f"Added event: {formatted_event['event']} at {formatted_event['time']}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing event: {str(e)}")
+                    logger.error(f"Event data: {event}")
+                    continue
+            
+            # Sort events by time
+            events.sort(key=lambda x: x['time'])
+            
+            logger.info(f"Processed {len(events)} upcoming events for {today}")
+            return events
             
     except Exception as e:
-        logger.error(f"Error creating events: {str(e)}")
+        logger.error(f"Error fetching calendar data: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return []
 
