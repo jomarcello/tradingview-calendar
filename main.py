@@ -99,9 +99,20 @@ Format times in 24-hour format."""
         ])
 
 def determine_impact(event: Dict) -> str:
-    """Determine impact level based on importance."""
-    importance = event.get('importance', 0)
-    return '🔴' if importance >= 3 else '🟡' if importance == 2 else '🟢'
+    """Determine impact level based on importance and event name."""
+    # Check event name for high-impact keywords
+    high_impact = ["NFP", "CPI", "GDP", "PMI", "Rate", "Employment", "Interest"]
+    medium_impact = ["Retail", "Trade", "Manufacturing", "Consumer", "Production"]
+    
+    event_name = event.get('Event', '').upper()
+    
+    for term in high_impact:
+        if term.upper() in event_name:
+            return '🔴'
+    for term in medium_impact:
+        if term.upper() in event_name:
+            return '🟡'
+    return '🟢'
 
 async def fetch_economic_calendar_data() -> List[Dict]:
     try:
@@ -125,9 +136,6 @@ async def fetch_economic_calendar_data() -> List[Dict]:
             data = response.json()
             logger.info(f"Received {len(data)} events from API")
             
-            # Filter for major currencies
-            major_currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"]
-            
             events = []
             for event in data:
                 try:
@@ -138,7 +146,7 @@ async def fetch_economic_calendar_data() -> List[Dict]:
                     # Map countries to currencies
                     if "United States" in country:
                         currency = "USD"
-                    elif "Euro Area" in country or "European Union" in country:
+                    elif "Euro Area" in country or "European Union" in country or "Germany" in country or "France" in country:
                         currency = "EUR"
                     elif "United Kingdom" in country:
                         currency = "GBP"
@@ -152,24 +160,35 @@ async def fetch_economic_calendar_data() -> List[Dict]:
                         currency = "CHF"
                     elif "New Zealand" in country:
                         currency = "NZD"
-                    
-                    if currency not in major_currencies:
-                        continue
+                    else:
+                        # For debugging
+                        logger.info(f"Unmatched country: {country}")
+                        currency = country[:3].upper()  # Use first 3 letters as currency
                     
                     # Convert event time to UTC
                     event_time = datetime.strptime(event['Date'], "%Y-%m-%dT%H:%M:%S")
                     
-                    # Determine impact level based on importance
+                    # Determine impact level
                     impact = determine_impact(event)
+                    
+                    # Get actual and forecast values, handle different formats
+                    actual = event.get('Actual', 'N/A')
+                    forecast = event.get('Forecast', 'N/A')
+                    
+                    # Clean up the event name
+                    event_name = event['Event'].replace('  ', ' ').strip()
                     
                     events.append({
                         "time": event_time.strftime("%H:%M"),
                         "currency": currency,
                         "impact": impact,
-                        "event": event['Event'],
-                        "actual": event.get('Actual'),
-                        "forecast": event.get('Forecast')
+                        "event": event_name,
+                        "actual": actual,
+                        "forecast": forecast
                     })
+                    
+                    # Log successful event processing
+                    logger.info(f"Processed event: {event_name} for {currency} at {event_time}")
                     
                 except Exception as e:
                     logger.error(f"Error processing event: {str(e)}")
